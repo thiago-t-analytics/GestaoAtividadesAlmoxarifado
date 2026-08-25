@@ -1,0 +1,6 @@
+{
+  "name": "Gestão de Almoxarifado Hospitalar",
+  "description": "Sistema de gestão de atividades, checklist, ocorrências e indicadores para almoxarifado hospitalar com interface inspirada no Monday.com.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

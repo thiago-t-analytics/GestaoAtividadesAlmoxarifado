@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Sistema de Gestão - Almoxarifado Hospitalar</title>
+  
+  <style>
+    :root {
+      --primary: #1565c0;
+      --primary-dark: #0d3f75;
+      --primary-light: #e3f2fd;
+      --bg: #f2f5f9;
+      --card-bg: #ffffff;
+      --border: #dde5ee;
+      --text-main: #16202b;
+      --text-muted: #5b6b7c;
+      
+      --status-scheduled: #b57d00;
+      --status-scheduled-bg: #fff5dc;
+      --status-pending: #c25708;
+      --status-pending-bg: #fdeee2;
+      --status-delayed: #c62828;
+      --status-delayed-bg: #fdeaea;
+      --status-done: #1b7f4f;
+      --status-done-bg: #e7f6ee;
+      --status-canceled: #94a3b8;
+      --status-canceled-bg: #f1f5f9;
+
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+      --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -1px rgba(0,0,0,0.04);
+      --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -2px rgba(0,0,0,0.03);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body { background-color: var(--bg); color: var(--text-main); font-size: 14px; line-height: 1.5; min-height: 100vh; display: flex; flex-direction: column; }
+
+    /* Top Bar */
+    .topbar { background: #ffffff; border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow-sm); }
+    .logo-area { display: flex; align-items: center; gap: 10px; }
+    .logo-badge { background: var(--primary); color: white; padding: 6px 10px; border-radius: var(--radius-sm); font-weight: 700; font-size: 14px; letter-spacing: 0.5px; }
+    .app-title { font-size: 16px; font-weight: 700; color: var(--primary-dark); }
+    .app-subtitle { font-size: 12px; color: var(--text-muted); }
+
+    .user-switcher { display: flex; align-items: center; gap: 8px; background: var(--bg); padding: 4px 8px; border-radius: var(--radius-md); border: 1px solid var(--border); }
+    .user-select { background: transparent; border: none; font-weight: 600; color: var(--text-main); font-size: 13px; outline: none; cursor: pointer; }
+    .role-badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; background: var(--primary-light); color: var(--primary); font-weight: 600; }
+
+    /* Navigation Tabs */
+    .nav-tabs { background: #ffffff; border-bottom: 1px solid var(--border); display: flex; gap: 4px; padding: 0 20px; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+    .nav-tab { padding: 12px 16px; background: none; border: none; font-size: 13px; font-weight: 600; color: var(--text-muted); cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.2s; display: flex; align-items: center; gap: 6px; }
+    .nav-tab:hover { color: var(--primary); background: #f8fafc; }
+    .nav-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+    .tab-counter { background: #e2e8f0; font-size: 11px; padding: 2px 6px; border-radius: 10px; font-weight: 700; }
+    .nav-tab.active .tab-counter { background: var(--primary-light); color: var(--primary); }
+
+    /* Main Container */
+    .container { max-width: 1400px; margin: 0 auto; padding: 20px; width: 100%; flex: 1; }
+
+    /* Alerts Banner */
+    .alerts-banner { margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
+    .alert-card { padding: 10px 16px; border-radius: var(--radius-md); font-size: 13px; display: flex; align-items: center; justify-content: space-between; border-left: 4px solid; box-shadow: var(--shadow-sm); }
+    .alert-Vermelho { background: #fee2e2; border-left-color: #ef4444; color: #991b1b; }
+    .alert-Laranja { background: #ffedd5; border-left-color: #f97316; color: #9a3412; }
+    .alert-Amarelo { background: #fef9c3; border-left-color: #eab308; color: #854d0e; }
+    .alert-Verde { background: #dcfce7; border-left-color: #22c55e; color: #166534; }
+
+    /* KPI Cards */
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }
+    .kpi-card { background: var(--card-bg); padding: 16px; border-radius: var(--radius-md); border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
+    .kpi-title { font-size: 12px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; margin-bottom: 4px; }
+    .kpi-val { font-size: 26px; font-weight: 800; color: var(--text-main); }
+    .kpi-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+    /* Kanban View */
+    .kanban-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+    .kanban-col { background: #ebf0f5; border-radius: var(--radius-lg); padding: 14px; display: flex; flex-direction: column; gap: 12px; min-height: 400px; }
+    .kanban-header { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 14px; color: var(--primary-dark); padding-bottom: 6px; border-bottom: 2px solid rgba(0,0,0,0.05); }
+
+    /* Activity Card */
+    .task-card { background: #ffffff; border-radius: var(--radius-md); padding: 14px; border: 1px solid var(--border); box-shadow: var(--shadow-sm); transition: transform 0.15s, box-shadow 0.15s; display: flex; flex-direction: column; gap: 10px; }
+    .task-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+    .task-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+    .task-title { font-weight: 700; font-size: 14px; color: var(--text-main); line-height: 1.3; }
+    .task-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+    
+    .badge-Agendada { color: var(--status-scheduled); background: var(--status-scheduled-bg); }
+    .badge-Pendente { color: var(--status-pending); background: var(--status-pending-bg); }
+    .badge-Em-atraso { color: var(--status-delayed); background: var(--status-delayed-bg); }
+    .badge-Concluída { color: var(--status-done); background: var(--status-done-bg); }
+    .badge-Cancelada { color: var(--status-canceled); background: var(--status-canceled-bg); }
+
+    .task-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--text-muted); }
+    .task-meta-item { display: flex; align-items: center; gap: 4px; }
+    
+    /* Checklist Progress Mini */
+    .progress-bar-wrap { background: #e2e8f0; height: 6px; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+    .progress-bar-fill { background: var(--primary); height: 100%; transition: width 0.3s ease; }
+
+    .task-actions { display: flex; gap: 8px; margin-top: 4px; }
+    .btn { padding: 7px 12px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; border: none; cursor: pointer; transition: background 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-success { background: #16a34a; color: white; }
+    .btn-success:hover { background: #15803d; }
+    .btn-outline { background: white; border: 1px solid var(--border); color: var(--text-main); }
+    .btn-outline:hover { background: #f8fafc; border-color: #cbd5e1; }
+    .btn-danger { background: #dc2626; color: white; }
+
+    /* Tables */
+    .table-container { background: #ffffff; border-radius: var(--radius-md); border: 1px solid var(--border); overflow-x: auto; box-shadow: var(--shadow-sm); }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { background: #f8fafc; padding: 12px 16px; font-size: 12px; font-weight: 700; color: var(--text-muted); border-bottom: 1px solid var(--border); text-transform: uppercase; }
+    td { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+    tr:hover td { background: #f9fbfe; }
+
+    /* Modal */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6); display: none; justify-content: center; align-items: center; z-index: 1000; padding: 16px; backdrop-filter: blur(2px); }
+    .modal-overlay.open { display: flex; }
+    .modal-box { background: white; width: 100%; max-width: 680px; max-height: 90vh; border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; animation: popIn 0.2s ease; }
+    .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: #fafbfc; }
+    .modal-title { font-size: 16px; font-weight: 700; color: var(--primary-dark); }
+    .modal-close { background: none; border: none; font-size: 20px; cursor: pointer; color: var(--text-muted); }
+    .modal-body { padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+    .modal-footer { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; background: #fafbfc; }
+
+    @keyframes popIn {
+      from { transform: scale(0.95); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    /* Form Fields */
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-label { font-size: 12px; font-weight: 600; color: var(--text-main); }
+    .form-input, .form-select, .form-textarea { padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; outline: none; transition: border-color 0.2s; }
+    .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: var(--primary); }
+
+    /* Checklist in Modal */
+    .checklist-list { display: flex; flex-direction: column; gap: 8px; }
+    .checklist-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+    .chk-left { display: flex; align-items: center; gap: 10px; flex: 1; }
+    .chk-left input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; }
+    .chk-left.checked span { text-decoration: line-through; color: var(--text-muted); }
+
+    /* Chat in Modal */
+    .chat-box { background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto; }
+    .chat-msg { background: white; border: 1px solid var(--border); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 12px; }
+    .chat-msg-header { display: flex; justify-content: space-between; font-weight: 700; color: var(--primary); margin-bottom: 2px; }
+
+    /* Toast */
+    .toast { position: fixed; bottom: 20px; right: 20px; background: #1e293b; color: white; padding: 12px 18px; border-radius: var(--radius-md); font-size: 13px; font-weight: 600; box-shadow: var(--shadow-lg); z-index: 2000; display: none; }
+    .toast.show { display: block; animation: popIn 0.2s ease; }
+  </style>
+</head>
+<body>
+
+  <!-- Top Bar -->
+  <header class="topbar">
+    <div class="logo-area">
+      <div class="logo-badge">ALMOX</div>
+      <div>
+        <h1 class="app-title">Hospital Regional - Gestão de Atividades</h1>
+        <p class="app-subtitle">Controle Operacional & Conformidade Hospitalar</p>
+      </div>
+    </div>
+
+    <div class="user-switcher">
+      <span style="font-size: 12px; color: var(--text-muted);">Usuário Ativo:</span>
+      <select id="userSelect" class="user-select" onchange="trocarUsuario(this.value)">
+        <option value="Thiago">Thiago (Almoxarife)</option>
+        <option value="Marcel" selected>Marcel (Assistente)</option>
+        <option value="Rafael">Rafael (Assistente)</option>
+      </select>
+      <span id="userRoleBadge" class="role-badge">Assistente</span>
+    </div>
+  </header>
+
+  <!-- Navigation -->
+  <nav class="nav-tabs">
+    <button class="nav-tab active" onclick="trocarAba('minhas-atividades', this)">
+      📌 Minhas Atividades <span id="cntMinhas" class="tab-counter">0</span>
+    </button>
+    <button class="nav-tab" onclick="trocarAba('painel', this)">
+      📊 Painel de Indicadores
+    </button>
+    <button class="nav-tab" onclick="trocarAba('todas-atividades', this)">
+      📋 Todas as Atividades <span id="cntTodas" class="tab-counter">0</span>
+    </button>
+    <button class="nav-tab" onclick="trocarAba('ocorrencias', this)">
+      ⚠️ Ocorrências <span id="cntOcr" class="tab-counter">0</span>
+    </button>
+    <button class="nav-tab" onclick="trocarAba('alertas', this)">
+      🔔 Alertas <span id="cntAlt" class="tab-counter">0</span>
+    </button>
+    <button class="nav-tab" onclick="trocarAba('catalogo', this)">
+      📦 Catálogo de Itens
+    </button>
+  </nav>
+
+  <!-- Main Content Area -->
+  <main class="container">
+    
+    <!-- Alertas Ativos -->
+    <div id="alertsBanner" class="alerts-banner"></div>
+
+    <!-- Visão 1: Minhas Atividades (Assistente - Foco Principal) -->
+    <section id="view-minhas-atividades">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h2 style="font-size: 18px; font-weight: 700; color: var(--primary-dark);">Minha Fila de Execução</h2>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-outline" onclick="sincronizarExecucoes()">🔄 Sincronizar</button>
+          <button class="btn btn-primary" onclick="abrirModalNovaAtividade()">+ Nova Atividade</button>
+        </div>
+      </div>
+
+      <div class="kanban-grid">
+        <!-- Coluna Hoje -->
+        <div class="kanban-col">
+          <div class="kanban-header">
+            <span>📌 Do Dia (Hoje)</span>
+            <span id="cntColHoje" class="tab-counter">0</span>
+          </div>
+          <div id="colHojeList" style="display: flex; flex-direction: column; gap: 10px;"></div>
+        </div>
+
+        <!-- Coluna Pendentes / Atrasadas -->
+        <div class="kanban-col">
+          <div class="kanban-header">
+            <span>⏳ Pendentes & Atrasadas</span>
+            <span id="cntColPend" class="tab-counter">0</span>
+          </div>
+          <div id="colPendList" style="display: flex; flex-direction: column; gap: 10px;"></div>
+        </div>
+
+        <!-- Coluna Concluídas -->
+        <div class="kanban-col">
+          <div class="kanban-header">
+            <span>✅ Concluídas Recentemente</span>
+            <span id="cntColConc" class="tab-counter">0</span>
+          </div>
+          <div id="colConcList" style="display: flex; flex-direction: column; gap: 10px;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Visão 2: Painel de Indicadores (Almoxarife) -->
+    <section id="view-painel" style="display: none;">
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-title">Total de Tarefas</div>
+          <div id="kpiTotal" class="kpi-val">0</div>
+          <div class="kpi-sub">Cadastradas no ciclo</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">Tarefas Hoje</div>
+          <div id="kpiHoje" class="kpi-val" style="color: var(--primary);">0</div>
+          <div class="kpi-sub">Execução programada</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">Em Atraso</div>
+          <div id="kpiAtraso" class="kpi-val" style="color: #dc2626;">0</div>
+          <div class="kpi-sub">Atenção requerida</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">Concluídas</div>
+          <div id="kpiConcluidas" class="kpi-val" style="color: #16a34a;">0</div>
+          <div class="kpi-sub"><span id="kpiTaxa">0%</span> de aproveitamento</div>
+        </div>
+      </div>
+
+      <!-- Performance por Assistente -->
+      <div style="background: white; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 18px; margin-bottom: 20px;">
+        <h3 style="font-weight: 700; margin-bottom: 14px;">Performance por Assistente</h3>
+        <div id="perfGrid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px;"></div>
+      </div>
+
+      <!-- Top Itens Ocorrências -->
+      <div style="background: white; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 18px;">
+        <h3 style="font-weight: 700; margin-bottom: 14px;">Top 5 Itens com Mais Ocorrências</h3>
+        <div id="topItemsList" style="display: flex; flex-direction: column; gap: 8px;"></div>
+      </div>
+    </section>
+
+    <!-- Visão 3: Todas as Atividades -->
+    <section id="view-todas-atividades" style="display: none;">
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Título / Categoria</th>
+              <th>Responsável</th>
+              <th>Periodicidade</th>
+              <th>Prazo Limite</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="todasAtividadesTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Visão 4: Ocorrências -->
+    <section id="view-ocorrencias" style="display: none;">
+      <div style="display: flex; justify-content: space-between; margin-bottom: 14px;">
+        <h2 style="font-weight: 700; font-size: 16px;">Registro de Ocorrências e Desvios</h2>
+        <button class="btn btn-danger" onclick="abrirModalNovaOcorrencia()">+ Registrar Ocorrência</button>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>ID / Setor</th>
+              <th>Categoria & Tipo</th>
+              <th>Item Envolvido</th>
+              <th>Necessita Ação?</th>
+              <th>Status</th>
+              <th>Data</th>
+            </tr>
+          </thead>
+          <tbody id="ocorrenciasTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Visão 5: Alertas -->
+    <section id="view-alertas" style="display: none;">
+      <div style="display: flex; justify-content: space-between; margin-bottom: 14px;">
+        <h2 style="font-weight: 700; font-size: 16px;">Quadro de Avisos e Alertas Operacionais</h2>
+        <button class="btn btn-primary" onclick="abrirModalNovoAlerta()">+ Emitir Alerta</button>
+      </div>
+      <div id="alertasListFull" style="display: flex; flex-direction: column; gap: 10px;"></div>
+    </section>
+
+    <!-- Visão 6: Catálogo de Itens -->
+    <section id="view-catalogo" style="display: none;">
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Código</th>
+              <th>Nome do Item</th>
+              <th>Categoria</th>
+              <th>Localização</th>
+              <th>Estoque Atual / Mínimo</th>
+            </tr>
+          </thead>
+          <tbody id="catalogoTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Modal Detalhes da Atividade (Checklist + Chat) -->
+  <div id="modalDetalhes" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="modDetTitle" class="modal-title">Detalhes da Atividade</h3>
+        <button class="modal-close" onclick="fecharModal('modalDetalhes')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span id="modDetStatusBadge" class="task-badge">Status</span>
+          <span id="modDetResp" style="font-size: 12px; color: var(--text-muted);">Responsável</span>
+        </div>
+        <div>
+          <h4 style="font-size: 12px; font-weight: 700; color: var(--text-muted);">DESCRIÇÃO</h4>
+          <p id="modDetDesc" style="font-size: 13px; margin-top: 4px;"></p>
+        </div>
+        <div>
+          <h4 style="font-size: 12px; font-weight: 700; color: var(--text-muted);">INSTRUÇÕES ("COMO EXECUTAR")</h4>
+          <p id="modDetInstr" style="font-size: 13px; margin-top: 4px; background: #f8fafc; padding: 8px; border-radius: 6px; border: 1px solid var(--border); white-space: pre-line;"></p>
+        </div>
+        
+        <!-- Checklist -->
+        <div>
+          <h4 style="font-size: 12px; font-weight: 700; color: var(--text-muted); margin-bottom: 6px;">ETAPAS DO CHECKLIST</h4>
+          <div id="modDetChecklist" class="checklist-list"></div>
+        </div>
+
+        <!-- Chat -->
+        <div>
+          <h4 style="font-size: 12px; font-weight: 700; color: var(--text-muted); margin-bottom: 6px;">HISTÓRICO / CHAT OPERACIONAL</h4>
+          <div id="modDetChat" class="chat-box"></div>
+          <div style="display: flex; gap: 8px; margin-top: 8px;">
+            <input type="text" id="chatInput" class="form-input" style="flex: 1;" placeholder="Escreva uma mensagem ou observação...">
+            <button class="btn btn-primary" onclick="enviarMensagemChat()">Enviar</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="fecharModal('modalDetalhes')">Fechar</button>
+        <button id="modDetBtnConcluir" class="btn btn-success" onclick="concluirAtividadeAtual()">Concluir Atividade</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast">Ação executada com sucesso!</div>
+
+  <script>
+    // Objeto Global do Aplicativo
+    var APP = {
+      usuarioAtivo: 'Marcel',
+      dados: null,
+      atividadeSelecionadaId: null
+    };
+
+    // Dados Mock caso executando fora do Google Apps Script
+    var DADOS_MOCK = {
+      atividades: [
+        {
+          ID_Execucao: "act-101",
+          Titulo: "Conferência semanal de estoque de luvas de procedimento",
+          Responsavel: "Marcel",
+          DataExecucao: new Date().toISOString().substring(0,10),
+          DataLimite: new Date().toISOString().substring(0,10),
+          Status: "Pendente",
+          Descricao: "Realizar contagem física de luvas nas prateleiras B1 e B2.",
+          Instrucoes: "1. Verificar lotes.\n2. Lançar no sistema MV.\n3. Organizar prateleiras.",
+          ChecklistProgressoJSON: JSON.stringify([
+            { id: "c1", text: "Contagem Luva M (1850 cx)", completed: true },
+            { id: "c2", text: "Contagem Luva G (900 cx)", completed: false },
+            { id: "c3", text: "Inspeção de validade", completed: false }
+          ]),
+          MensagensChatJSON: "[]"
+        }
+      ],
+      ocorrencias: [],
+      alertas: [],
+      itens: [],
+      indicadores: { total: 1, pendentes: 1, hoje: 1, atrasadas: 0, concluidas: 0, taxaConclusao: 0, performanceAssistentes: { Thiago: { total: 0, concluidas: 0 }, Marcel: { total: 1, concluidas: 0 }, Rafael: { total: 0, concluidas: 0 } } }
+    };
+
+    // Inicialização
+    window.addEventListener('DOMContentLoaded', function() {
+      carregarDados();
+    });
+
+    function carregarDados() {
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(function(res) {
+            if (res.ok) {
+              APP.dados = res.dados;
+              renderizarTudo();
+            }
+          })
+          .getDados();
+      } else {
+        // Fallback Mock Local
+        APP.dados = DADOS_MOCK;
+        renderizarTudo();
+      }
+    }
+
+    function trocarUsuario(novoUser) {
+      APP.usuarioAtivo = novoUser;
+      document.getElementById('userRoleBadge').innerText = novoUser === 'Thiago' ? 'Almoxarife' : 'Assistente';
+      renderizarTudo();
+      mostrarToast('Usuário alterado para ' + novoUser);
+    }
+
+    function trocarAba(abaId, btn) {
+      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+
+      document.querySelectorAll('main > section').forEach(sec => sec.style.display = 'none');
+      var el = document.getElementById('view-' + abaId);
+      if (el) el.style.display = 'block';
+    }
+
+    function renderizarTudo() {
+      if (!APP.dados) return;
+      renderizarMinhasAtividades();
+      renderizarPainel();
+    }
+
+    function renderizarMinhasAtividades() {
+      var hojeList = document.getElementById('colHojeList');
+      var pendList = document.getElementById('colPendList');
+      var concList = document.getElementById('colConcList');
+
+      hojeList.innerHTML = '';
+      pendList.innerHTML = '';
+      concList.innerHTML = '';
+
+      var hojeStr = new Date().toISOString().substring(0,10);
+      var ativs = APP.dados.atividades || [];
+
+      var cHoje = 0, cPend = 0, cConc = 0;
+
+      ativs.forEach(function(act) {
+        var resp = act.Responsavel || act.responsible;
+        if (resp !== APP.usuarioAtivo && resp !== 'Todos' && APP.usuarioAtivo !== 'Thiago') {
+          return;
+        }
+
+        var card = criarCardAtividade(act);
+        var status = act.Status || act.status;
+        var dataExec = act.DataExecucao || act.executionDate;
+
+        if (status === 'Concluída') {
+          concList.appendChild(card);
+          cConc++;
+        } else if (dataExec === hojeStr) {
+          hojeList.appendChild(card);
+          cHoje++;
+        } else {
+          pendList.appendChild(card);
+          cPend++;
+        }
+      });
+
+      document.getElementById('cntColHoje').innerText = cHoje;
+      document.getElementById('cntColPend').innerText = cPend;
+      document.getElementById('cntColConc').innerText = cConc;
+      document.getElementById('cntMinhas').innerText = cHoje + cPend;
+    }
+
+    function criarCardAtividade(act) {
+      var id = act.ID_Execucao || act.id;
+      var titulo = act.Titulo || act.title;
+      var status = act.Status || act.status;
+      var badgeClass = 'badge-' + status.replace(' ', '-');
+
+      var div = document.createElement('div');
+      div.className = 'task-card';
+      div.innerHTML = `
+        <div class="task-top">
+          <span class="task-title">${titulo}</span>
+          <span class="task-badge ${badgeClass}">${status}</span>
+        </div>
+        <div class="task-meta">
+          <span>👤 ${act.Responsavel || act.responsible}</span>
+          <span>📅 ${act.DataLimite || act.dueDate || 'Hoje'}</span>
+        </div>
+        <div class="task-actions">
+          <button class="btn btn-outline" style="flex: 1;" onclick="abrirDetalhes('${id}')">Detalhes & Checklist</button>
+          ${status !== 'Concluída' ? `<button class="btn btn-success" onclick="concluir('${id}')">Concluir</button>` : ''}
+        </div>
+      `;
+      return div;
+    }
+
+    function abrirDetalhes(id) {
+      APP.atividadeSelecionadaId = id;
+      var act = (APP.dados.atividades || []).find(a => (a.ID_Execucao || a.id) === id);
+      if (!act) return;
+
+      document.getElementById('modDetTitle').innerText = act.Titulo || act.title;
+      document.getElementById('modDetDesc').innerText = act.Descricao || act.description || 'Sem descrição cadastrada.';
+      document.getElementById('modDetInstr').innerText = act.Instrucoes || act.instructions || 'Seguir boas práticas operacionais do almoxarifado.';
+
+      var chkContainer = document.getElementById('modDetChecklist');
+      chkContainer.innerHTML = '';
+
+      var checklist = [];
+      try {
+        checklist = typeof act.ChecklistProgressoJSON === 'string' ? JSON.parse(act.ChecklistProgressoJSON) : (act.checklist || []);
+      } catch(e) {}
+
+      if (checklist.length === 0) {
+        chkContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 12px;">Nenhum item de checklist.</p>';
+      } else {
+        checklist.forEach(function(item, idx) {
+          var itemDiv = document.createElement('div');
+          itemDiv.className = 'checklist-item';
+          itemDiv.innerHTML = `
+            <label class="chk-left ${item.completed ? 'checked' : ''}">
+              <input type="checkbox" ${item.completed ? 'checked' : ''} onchange="toggleChecklist('${id}', ${idx}, this.checked)">
+              <span>${item.text}</span>
+            </label>
+          `;
+          chkContainer.appendChild(itemDiv);
+        });
+      }
+
+      document.getElementById('modalDetalhes').classList.add('open');
+    }
+
+    function fecharModal(id) {
+      document.getElementById(id).classList.remove('open');
+    }
+
+    function mostrarToast(msg) {
+      var t = document.getElementById('toast');
+      t.innerText = msg;
+      t.classList.add('show');
+      setTimeout(function() { t.classList.remove('show'); }, 3000);
+    }
+  </script>
+</body>
+</html>
