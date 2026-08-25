@@ -4,25 +4,29 @@
  * Backend Google Apps Script (Code.gs)
  * ============================================================================
  * 
- * Estrutura de Abas da Planilha:
- * 1. ATIVIDADES     -> Modelos e parâmetros de atividades
- * 2. EXECUCOES      -> Instâncias diárias de tarefas
- * 3. OCORRENCIAS    -> Registro de desvios, avarias e faltas de materiais
- * 4. ALERTAS        -> Avisos gerais e direcionados com níveis de criticidade
- * 5. CONFIGURACOES  -> Parâmetros gerais do sistema e lista de usuários
- * 6. AUDITORIA      -> Trilha completa de auditoria e ações realizadas
- * 7. ITENS          -> Catálogo de suprimentos hospitalares (código, estoque, local)
+ * Banco de Dados: Google Sheets (8 Abas)
+ * 1. ATIVIDADES     -> Modelos e parâmetros de atividades recorrentes e pontuais
+ * 2. EXECUCOES      -> Instâncias diárias de execução de tarefas
+ * 3. OCORRENCIAS    -> Registro de desvios, faltas, avarias e desvios de temperatura
+ * 4. ALERTAS        -> Quadro de avisos com níveis de criticidade por cores
+ * 5. CONFIGURACOES  -> Parâmetros gerais e regras do almoxarifado
+ * 6. AUDITORIA      -> Trilha completa de auditoria e logs de operação
+ * 7. ITENS          -> Catálogo de suprimentos hospitalares (saldo e localização)
+ * 8. USUARIOS       -> Usuários fixos (Thiago, Marcel, Rafael)
  * 
- * Regras de Negócio:
- * - Sem tela de login externa: Usuários fixos "Thiago" (Almoxarife), "Marcel", "Rafael" (Assistentes)
- * - Flag "Necessita ação" em ocorrências gera tarefa automática para TODOS
- * - Todas as funções públicas retornam { ok: boolean, dados: any, mensagem?: string }
- * - Otimização via CacheService (TTL 5 minutos)
+ * Regras de Negócio Implementadas:
+ * - Acesso livre sem tela de login: 3 usuários fixos com alternância imediata
+ * - Gatilho Automático: Ocorrência com "Necessita Ação" cria tarefa para TODOS os assistentes
+ * - CacheService (TTL 5 minutos) com invalidação inteligente nas mutações
+ * - Resposta padronizada em formato JSON { ok: boolean, dados: any, mensagem?: string }
  */
 
-// Constantes Globais
+// ============================================================================
+// CONSTANTES GLOBAIS
+// ============================================================================
 var CACHE_TTL_SECS = 300; // 5 minutos
 var USUARIOS_FIXOS = ["Thiago", "Marcel", "Rafael"];
+
 var ABAS = {
   ATIVIDADES: "ATIVIDADES",
   EXECUCOES: "EXECUCOES",
@@ -30,40 +34,45 @@ var ABAS = {
   ALERTAS: "ALERTAS",
   CONFIGURACOES: "CONFIGURACOES",
   AUDITORIA: "AUDITORIA",
-  ITENS: "ITENS"
+  ITENS: "ITENS",
+  USUARIOS: "USUARIOS"
 };
 
+// ============================================================================
+// PONTO DE ENTRADA DO WEB APP
+// ============================================================================
+
 /**
- * Ponto de entrada do Web App no Google Apps Script
- * Renderiza o frontend Index.html com meta tags responsivas.
+ * Manipulador de requisições HTTP GET do Google Apps Script
+ * Renderiza o frontend Index.html com viewport responsiva
  */
 function doGet(e) {
   var template = HtmlService.createTemplateFromFile("Index");
   return template.evaluate()
-    .setTitle("Gestão Almoxarifado Hospitalar")
+    .setTitle("Gestão de Almoxarifado Hospitalar")
     .addMetaTag("viewport", "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no")
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 /**
- * Inclui arquivos parciais no HTML (caso necessário no Apps Script)
+ * Inclui arquivos parciais no HTML se necessário
  */
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
 
+// ============================================================================
+// SETUP & INICIALIZAÇÃO DA PLANILHA GOOGLE SHEETS
+// ============================================================================
+
 /**
- * Função de Setup / Inicialização Completa da Planilha
- * Cria abas, cabeçalhos estilizados e dados demonstrativos.
+ * Função de inicialização e setup completo
+ * Cria as 8 abas com cabeçalhos estilizados em azul (#1565c0) e dados demonstrativos
  */
 function setup() {
   return inicializarSistema();
 }
 
-/**
- * Inicializa a planilha criando as 7 abas com cabeçalhos e dados iniciais
- * @return {Object} { ok: boolean, dados: Object }
- */
 function inicializarSistema() {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -113,465 +122,531 @@ function inicializarSistema() {
       "Codigo", "NomeItem", "Categoria", "Localizacao", "EstoqueMinimo", "EstoqueAtual", "Unidade"
     ]);
 
-    // Popula catálogo de itens caso esteja vazio
-    if (abaItens.getLastRow() <= 1) {
-      _popularItensIniciais_(abaItens);
-    }
+    // 8. Aba USUARIOS
+    var abaUsuarios = _obterOuCriarAba_(ss, ABAS.USUARIOS, [
+      "ID", "Nome", "Cargo", "Email"
+    ]);
 
-    // Popula configurações iniciais
-    if (abaConfig.getLastRow() <= 1) {
-      _popularConfiguracoesIniciais_(abaConfig);
-    }
+    // Popular dados de exemplo se estiverem vazias
+    _popularDadosExemplo_(abaAtividades, abaExecucoes, abaOcorrencias, abaAlertas, abaConfig, abaItens, abaUsuarios);
 
-    // Popula atividades e ocorrências iniciais se vazias
-    if (abaAtividades.getLastRow() <= 1) {
-      _popularAtividadesIniciais_(abaAtividades, abaExecucoes, abaAlertas, abaOcorrencias);
-    }
+    limparCache();
+    _registrarLog_("SETUP", "SISTEMA", "ALL", "Inicialização da estrutura de 8 abas concluída com sucesso.");
 
-    _limparCache_();
-    _registrarAuditoria_("Sistema", "Inicialização", "Sistema", "SETUP", "Banco de dados e abas configurados com sucesso.");
-
-    return {
-      ok: true,
-      dados: {
-        mensagem: "Sistema inicializado com sucesso!",
-        timestamp: new Date().toISOString()
-      }
+    return { 
+      ok: true, 
+      dados: { mensagem: "Sistema inicializado com sucesso com 8 abas prontas!" } 
     };
-  } catch (erro) {
-    return { ok: false, mensagem: erro.toString(), dados: null };
+  } catch (error) {
+    Logger.log("Erro na inicialização: " + error.toString());
+    return { ok: false, mensagem: "Erro no setup: " + error.message };
   }
 }
 
+// ============================================================================
+// LEITURA DE DADOS & CACHING (getDados)
+// ============================================================================
+
 /**
- * Retorna todos os dados da aplicação em um único payload otimizado
- * Utiliza CacheService para resposta ultrarrápida (< 50ms)
+ * Retorna todos os dados consolidados do almoxarifado para o frontend
+ * @param {string} usuarioAtivo - Filtro opcional de usuário ativo
  * @return {Object} { ok: boolean, dados: Object }
  */
-function getDados() {
+function getDados(usuarioAtivo) {
   try {
     var cache = CacheService.getScriptCache();
-    var cached = cache.get("DADOS_SISTEMA_ALMOXARIFADO");
+    var cacheKey = "almox_dados_v2";
+    var cached = cache.get(cacheKey);
+
+    var dados;
     if (cached) {
-      return { ok: true, dados: JSON.parse(cached), doCache: true };
+      try {
+        dados = JSON.parse(cached);
+      } catch (e) {
+        dados = null;
+      }
     }
 
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (!ss) return { ok: false, mensagem: "Planilha não vinculada.", dados: null };
+    if (!dados) {
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      if (!ss) {
+        return { ok: false, mensagem: "Planilha não vinculada." };
+      }
 
-    var atividades = _lerTabelaComoObjetos_(ss.getSheetByName(ABAS.EXECUCOES));
-    var ocorrencias = _lerTabelaComoObjetos_(ss.getSheetByName(ABAS.OCORRENCIAS));
-    var alertas = _lerTabelaComoObjetos_(ss.getSheetByName(ABAS.ALERTAS));
-    var itens = _lerTabelaComoObjetos_(ss.getSheetByName(ABAS.ITENS));
-    var auditoria = _lerTabelaComoObjetos_(ss.getSheetByName(ABAS.AUDITORIA));
-    var indicadores = obterIndicadores().dados;
+      dados = {
+        atividades: _lerAbaComoObjetos_(ss, ABAS.EXECUCOES),
+        modelosAtividades: _lerAbaComoObjetos_(ss, ABAS.ATIVIDADES),
+        ocorrencias: _lerAbaComoObjetos_(ss, ABAS.OCORRENCIAS),
+        alertas: _lerAbaComoObjetos_(ss, ABAS.ALERTAS),
+        itens: _lerAbaComoObjetos_(ss, ABAS.ITENS),
+        usuarios: _lerAbaComoObjetos_(ss, ABAS.USUARIOS),
+        timestamp: new Date().toISOString()
+      };
 
-    var payload = {
-      atividades: atividades,
-      ocorrencias: ocorrencias,
-      alertas: alertas,
-      itens: itens,
-      auditoria: auditoria.slice(-50), // Últimos 50 logs
-      indicadores: indicadores,
-      usuarios: USUARIOS_FIXOS,
-      timestamp: new Date().toISOString()
-    };
+      // Parser de campos JSON
+      dados.atividades.forEach(function(act) {
+        act.checklist = _parseJSONSeguro_(act.ChecklistProgressoJSON || act.ChecklistJSON, []);
+        act.messages = _parseJSONSeguro_(act.MensagensChatJSON, []);
+        act.id = act.ID_Execucao || act.ID;
+        act.title = act.Titulo;
+        act.description = act.Descricao || "";
+        act.responsible = act.Responsavel;
+        act.status = act.Status;
+        act.dueDate = act.DataLimite ? _formatarDataStr_(act.DataLimite) : "";
+        act.executionDate = act.DataExecucao ? _formatarDataStr_(act.DataExecucao) : "";
+        act.originOccurrenceId = act.OrigemOcorrenciaID || "";
+        act.category = act.Categoria || "Rotina Geral";
+        act.periodicity = act.Periodicidade || "Diária";
+        act.priority = act.Prioridade || (act.OrigemOcorrenciaID ? "Urgente" : "Normal");
+      });
 
-    cache.put("DADOS_SISTEMA_ALMOXARIFADO", JSON.stringify(payload), CACHE_TTL_SECS);
+      dados.ocorrencias.forEach(function(oc) {
+        oc.id = oc.ID_Ocorrencia || oc.ID;
+        oc.sector = oc.Setor;
+        oc.category = oc.Categoria;
+        oc.type = oc.Tipo;
+        oc.itemCode = oc.ItemCodigoNome;
+        oc.description = oc.Descricao;
+        oc.requiresAction = (oc.NecessitaAcao === true || oc.NecessitaAcao === "TRUE" || oc.NecessitaAcao === "SIM");
+        oc.createdActivityId = oc.AtividadeGeradaID;
+        oc.registeredBy = oc.RegistradoPor;
+        oc.registeredAt = oc.DataRegistro ? _formatarDataStr_(oc.DataRegistro) : "";
+        oc.status = oc.Status;
+      });
 
-    return { ok: true, dados: payload };
-  } catch (erro) {
-    return { ok: false, mensagem: erro.toString(), dados: null };
+      dados.alertas.forEach(function(al) {
+        al.id = al.ID_Alerta || al.ID;
+        al.message = al.Mensagem;
+        al.priority = al.Prioridade;
+        al.targetUser = al.Destinatario;
+        al.createdBy = al.CriadoPor;
+        al.createdAt = al.DataCriacao ? _formatarDataStr_(al.DataCriacao) : "";
+        al.expiresAt = al.DataExpiracao ? _formatarDataStr_(al.DataExpiracao) : "";
+        al.active = (al.Ativo === true || al.Ativo === "TRUE" || al.Ativo === "SIM");
+      });
+
+      dados.itens.forEach(function(it) {
+        it.code = it.Codigo;
+        it.name = it.NomeItem;
+        it.category = it.Categoria;
+        it.location = it.Localizacao;
+        it.minStock = Number(it.EstoqueMinimo) || 0;
+        it.currentStock = Number(it.EstoqueAtual) || 0;
+        it.unit = it.Unidade;
+      });
+
+      // Salvar em cache
+      try {
+        cache.put(cacheKey, JSON.stringify(dados), CACHE_TTL_SECS);
+      } catch (e) {
+        // Cache overflow fallback
+      }
+    }
+
+    return { ok: true, dados: dados };
+  } catch (error) {
+    Logger.log("Erro em getDados: " + error.toString());
+    return { ok: false, mensagem: "Erro ao obter dados: " + error.message };
   }
 }
 
+// ============================================================================
+// MUTAÇÕES DE ATIVIDADES & EXECUÇÕES
+// ============================================================================
+
 /**
- * Cria uma nova atividade e gera a instância de execução correspondente
- * @param {Object} dados Objeto com dados da atividade
- * @param {string} usuarioAutor Nome do usuário que criou
- * @return {Object}
+ * Cria uma nova atividade e sua execução inicial
  */
-function criarAtividade(dados, usuarioAutor) {
+function criarAtividade(dados) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var abaAtiv = ss.getSheetByName(ABAS.ATIVIDADES);
-    var abaExec = ss.getSheetByName(ABAS.EXECUCOES);
-    var autor = usuarioAutor || "Thiago";
+    var abaAtividades = ss.getSheetByName(ABAS.ATIVIDADES);
+    var abaExecucoes = ss.getSheetByName(ABAS.EXECUCOES);
 
-    var idAtiv = _gerarIdUnico_("ACT");
-    var idExec = _gerarIdUnico_("EXE");
-    var hojeStr = _formatarDataIso_(new Date());
+    var idAtividade = "ACT-" + Utilities.getUuid().substring(0, 8).toUpperCase();
+    var hoje = new Date();
+    var hojeStr = _formatarDataISO_(hoje);
+    var prazoDias = Number(dados.deadlineDays || dados.prazoDias) || 1;
+    var dataLimite = new Date(hoje.getTime() + prazoDias * 24 * 60 * 60 * 1000);
+    var dataLimiteStr = _formatarDataISO_(dataLimite);
 
-    var prazoDias = Number(dados.prazoDias) || 1;
-    var dataExec = dados.dataExecucao || hojeStr;
-    var dataLimite = _calcularDataLimite_(dataExec, prazoDias);
+    var checklistJSON = JSON.stringify(dados.checklist || []);
 
-    var checklistJson = JSON.stringify(dados.checklist || []);
-    var mensagensJson = JSON.stringify(dados.mensagens || []);
-    var itensJson = JSON.stringify(dados.itemIds || []);
-
-    var statusInicial = "Pendente";
-    if (dataExec > hojeStr) statusInicial = "Agendada";
-    if (dataLimite < hojeStr) statusInicial = "Em atraso";
-
-    // 1. Grava no modelo
-    abaAtiv.appendRow([
-      idAtiv,
-      dados.titulo || "Atividade Sem Título",
-      dados.descricao || "",
-      dados.categoria || "Geral",
-      dados.tipo || "pontual",
-      dados.periodicidade || "Pontual",
-      dados.diaSemana || "",
-      dados.diaMes || "",
-      dados.responsavel || "Todos",
+    // 1. Gravar em ATIVIDADES
+    abaAtividades.appendRow([
+      idAtividade,
+      dados.title || dados.titulo,
+      dados.description || dados.descricao || "",
+      dados.category || dados.categoria || "Geral",
+      dados.type || dados.tipo || "Operacional",
+      dados.periodicity || dados.periodicidade || "Pontual",
+      dados.weekDay || "",
+      dados.monthDay || "",
+      dados.responsible || dados.responsavel || "Todos",
       prazoDias,
-      dados.instrucoes || "",
-      itensJson,
-      checklistJson,
+      dados.instructions || dados.instrucoes || "",
+      dados.relatedItems ? JSON.stringify(dados.relatedItems) : "[]",
+      checklistJSON,
       hojeStr,
-      "Ativo"
+      "Ativa"
     ]);
 
-    // 2. Grava na execução
-    abaExec.appendRow([
+    // 2. Gravar em EXECUCOES
+    var idExec = "EXEC-" + Utilities.getUuid().substring(0, 8).toUpperCase();
+    abaExecucoes.appendRow([
       idExec,
-      idAtiv,
-      dados.titulo || "Atividade Sem Título",
-      dados.responsavel || "Todos",
-      dataExec,
-      dataLimite,
-      statusInicial,
-      checklistJson,
+      idAtividade,
+      dados.title || dados.titulo,
+      dados.responsible || dados.responsavel || "Todos",
+      hojeStr,
+      dataLimiteStr,
+      "Pendente",
+      checklistJSON,
       "",
       "",
-      mensagensJson,
-      dados.origemOcorrenciaId || ""
+      "[]",
+      dados.originOccurrenceId || ""
     ]);
 
-    _limparCache_();
-    _registrarAuditoria_(autor, "Criar Atividade", "Atividade", idExec, "Atividade criada: " + dados.titulo);
+    limparCache();
+    _registrarLog_(dados.creator || "Thiago", "CRIAR", "ATIVIDADE", idAtividade, "Criada: " + (dados.title || dados.titulo));
 
-    return { ok: true, dados: { id: idExec, idAtividade: idAtiv, titulo: dados.titulo } };
-  } catch (erro) {
-    return { ok: false, mensagem: erro.toString(), dados: null };
+    return { 
+      ok: true, 
+      dados: { id: idExec, idAtividade: idAtividade }, 
+      mensagem: "Atividade criada com sucesso!" 
+    };
+  } catch (error) {
+    return { ok: false, mensagem: "Erro ao criar atividade: " + error.message };
   }
 }
 
 /**
- * Conclui uma atividade específica
- * @param {string} idExecucao ID da execução
- * @param {string} usuarioResponsavel Nome do assistente/almoxarife
- * @return {Object}
+ * Conclui uma atividade/execução com registro do operador
  */
-function concluirAtividade(idExecucao, usuarioResponsavel) {
+function concluirAtividade(idExecucao, usuario) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var aba = ss.getSheetByName(ABAS.EXECUCOES);
     var dados = aba.getDataRange().getValues();
-    var user = usuarioResponsavel || "Marcel";
-    var hojeStr = _formatarDataIso_(new Date());
 
     var colId = 0; // ID_Execucao
     var colStatus = 6;
     var colConcluidoPor = 8;
     var colConcluidoEm = 9;
 
-    var encontrada = false;
+    var linhaAlvo = -1;
     for (var i = 1; i < dados.length; i++) {
-      if (dados[i][colId] == idExecucao) {
-        aba.getRange(i + 1, colStatus + 1).setValue("Concluída");
-        aba.getRange(i + 1, colConcluidoPor + 1).setValue(user);
-        aba.getRange(i + 1, colConcluidoEm + 1).setValue(hojeStr);
-        encontrada = true;
+      if (String(dados[i][colId]) === String(idExecucao)) {
+        linhaAlvo = i + 1;
         break;
       }
     }
 
-    if (!encontrada) {
-      return { ok: false, mensagem: "Atividade não encontrada.", dados: null };
+    if (linhaAlvo === -1) {
+      return { ok: false, mensagem: "Atividade não encontrada na base." };
     }
 
-    _limparCache_();
-    _registrarAuditoria_(user, "Concluir Atividade", "Atividade", idExecucao, "Atividade concluída com sucesso.");
+    var agoraStr = new Date().toISOString();
+    aba.getRange(linhaAlvo, colStatus + 1).setValue("Concluída");
+    aba.getRange(linhaAlvo, colConcluidoPor + 1).setValue(usuario || "Marcel");
+    aba.getRange(linhaAlvo, colConcluidoEm + 1).setValue(agoraStr);
 
-    return { ok: true, dados: { id: idExecucao, status: "Concluída" } };
-  } catch (erro) {
-    return { ok: false, mensagem: erro.toString(), dados: null };
+    limparCache();
+    _registrarLog_(usuario || "Operador", "CONCLUIR", "EXECUCAO", idExecucao, "Atividade concluída");
+
+    return { ok: true, mensagem: "Atividade concluída com sucesso!" };
+  } catch (error) {
+    return { ok: false, mensagem: "Erro ao concluir: " + error.message };
   }
 }
 
 /**
- * Cancela uma atividade
- * @param {string} idExecucao
- * @param {string} usuario
+ * Atualiza o progresso do checklist e quantidades contadas
  */
-function cancelarAtividade(idExecucao, usuario) {
+function salvarChecklistProgresso(idExecucao, checklist, usuario) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var aba = ss.getSheetByName(ABAS.EXECUCOES);
     var dados = aba.getDataRange().getValues();
-    var user = usuario || "Thiago";
 
+    var colId = 0;
+    var colChecklist = 7; // ChecklistProgressoJSON
+
+    var linhaAlvo = -1;
     for (var i = 1; i < dados.length; i++) {
-      if (dados[i][0] == idExecucao) {
-        aba.getRange(i + 1, 7).setValue("Cancelada");
-        _limparCache_();
-        _registrarAuditoria_(user, "Cancelar Atividade", "Atividade", idExecucao, "Atividade cancelada.");
-        return { ok: true, dados: { id: idExecucao, status: "Cancelada" } };
+      if (String(dados[i][colId]) === String(idExecucao)) {
+        linhaAlvo = i + 1;
+        break;
       }
     }
 
-    return { ok: false, mensagem: "Atividade não encontrada.", dados: null };
-  } catch (erro) {
-    return { ok: false, mensagem: erro.toString(), dados: null };
+    if (linhaAlvo === -1) {
+      return { ok: false, mensagem: "Execução não encontrada." };
+    }
+
+    var jsonStr = typeof checklist === "string" ? checklist : JSON.stringify(checklist);
+    aba.getRange(linhaAlvo, colChecklist + 1).setValue(jsonStr);
+
+    limparCache();
+    return { ok: true, mensagem: "Checklist atualizado." };
+  } catch (error) {
+    return { ok: false, mensagem: "Erro ao salvar checklist: " + error.message };
   }
 }
 
 /**
- * Cria uma ocorrência com regra de negócio: Se NecessitaAcao -> gera atividade para TODOS
- * @param {Object} dados Dados da ocorrência
- * @param {string} usuarioAutor Autor do registro
- * @return {Object}
+ * Envia uma mensagem no chat da atividade
  */
-function criarOcorrencia(dados, usuarioAutor) {
+function enviarMensagemChat(idExecucao, texto, autor) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var abaOcr = ss.getSheetByName(ABAS.OCORRENCIAS);
-    var autor = usuarioAutor || "Rafael";
-    var idOcr = _gerarIdUnico_("OCR");
-    var hojeStr = _formatarDataIso_(new Date());
+    var aba = ss.getSheetByName(ABAS.EXECUCOES);
+    var dados = aba.getDataRange().getValues();
 
-    var necessitaAcao = Boolean(dados.necessitaAcao);
+    var colId = 0;
+    var colChat = 10; // MensagensChatJSON
+
+    var linhaAlvo = -1;
+    var msgsAtuais = [];
+
+    for (var i = 1; i < dados.length; i++) {
+      if (String(dados[i][colId]) === String(idExecucao)) {
+        linhaAlvo = i + 1;
+        msgsAtuais = _parseJSONSeguro_(dados[i][colChat], []);
+        break;
+      }
+    }
+
+    if (linhaAlvo === -1) {
+      return { ok: false, mensagem: "Atividade não encontrada." };
+    }
+
+    var novaMsg = {
+      id: "msg-" + Utilities.getUuid().substring(0, 6),
+      author: autor || "Operador",
+      text: texto,
+      timestamp: new Date().toISOString()
+    };
+
+    msgsAtuais.push(novaMsg);
+    aba.getRange(linhaAlvo, colChat + 1).setValue(JSON.stringify(msgsAtuais));
+
+    limparCache();
+    return { ok: true, dados: novaMsg };
+  } catch (error) {
+    return { ok: false, mensagem: "Erro no chat: " + error.message };
+  }
+}
+
+// ============================================================================
+// OCORRÊNCIAS & AUTOMAÇÃO DE AÇÃO CORRETIVA
+// ============================================================================
+
+/**
+ * Cria uma nova ocorrência hospitalar
+ * REGRA DE NEGÓCIO: Se "NecessitaAcao" for verdadeiro, gera automaticamente
+ * uma atividade prioritária para TODOS os assistentes
+ */
+function criarOcorrencia(dados, usuario) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var abaOcorrencias = ss.getSheetByName(ABAS.OCORRENCIAS);
+
+    var idOcorrencia = "OC-" + Utilities.getUuid().substring(0, 6).toUpperCase();
+    var dataHoje = _formatarDataISO_(new Date());
+    var necessitaAcao = (dados.requiresAction === true || dados.requiresAction === "TRUE" || dados.necessitaAcao === true);
     var idAtividadeGerada = "";
-    var statusOcr = "Aberta";
 
-    // Regra: gera atividade automática atribuída a TODOS
+    // Automação: Gerar Atividade se necessita ação
     if (necessitaAcao) {
-      statusOcr = "Em Tratamento";
       var resAtiv = criarAtividade({
-        titulo: "[Ocorrência " + dados.setor + "] " + dados.categoria,
-        descricao: "Ação gerada pela ocorrência: " + (dados.descricao || "") + " | Item: " + (dados.itemCodigoNome || "N/A"),
-        categoria: "Auditoria & Controle",
-        tipo: "pontual",
-        periodicidade: "Pontual",
-        responsavel: "Todos",
-        prazoDias: 1,
-        dataExecucao: hojeStr,
-        prioridade: "Urgente",
-        instrucoes: "Inspecionar setor " + dados.setor + " e efetuar recontagem/quarentena necessária.",
-        origemOcorrenciaId: idOcr,
+        title: "Ação Corretiva: " + (dados.category || "Desvio") + " - " + (dados.itemCode || dados.sector || "Almoxarifado"),
+        description: "Ocorrência " + idOcorrencia + ": " + (dados.description || "Verificação imediata requerida.") + " | Setor: " + (dados.sector || "N/A"),
+        category: "Auditoria / Ocorrência",
+        responsible: "Todos",
+        periodicity: "Pontual",
+        deadlineDays: 1,
+        originOccurrenceId: idOcorrencia,
         checklist: [
-          { text: "Inspeção física no setor " + dados.setor, completed: false },
-          { text: "Ajuste de estoque ou isolamento de lote", completed: false },
-          { text: "Validação final e encerramento de ocorrência", completed: false }
+          { id: "c1", label: "Inspeção física no setor de origem", targetQuantity: 1, countedQuantity: 0, unit: "un", completed: false },
+          { id: "c2", label: "Segregar item em quarentena e etiquetar", targetQuantity: 1, countedQuantity: 0, unit: "un", completed: false },
+          { id: "c3", label: "Ajuste de saldo no sistema de estoque", targetQuantity: 1, countedQuantity: 0, unit: "un", completed: false }
         ]
-      }, "Sistema (Automático)");
+      });
 
       if (resAtiv.ok && resAtiv.dados) {
         idAtividadeGerada = resAtiv.dados.id;
       }
     }
 
-    abaOcr.appendRow([
-      idOcr,
-      dados.setor || "Almoxarifado Geral",
-      dados.categoria || "Geral",
-      dados.tipo || "Desvio Operacional",
-      dados.itemCodigoNome || "Item não especificado",
-      dados.descricao || "",
-      necessitaAcao ? "SIM" : "NAO",
+    abaOcorrencias.appendRow([
+      idOcorrencia,
+      dados.sector || dados.setor || "Almoxarifado Central",
+      dados.category || dados.categoria || "Geral",
+      dados.type || dados.tipo || "Desvio Operacional",
+      dados.itemCode || dados.itemCodigoNome || "",
+      dados.description || dados.descricao || "",
+      necessitaAcao ? "SIM" : "NÃO",
       idAtividadeGerada,
-      autor,
-      hojeStr,
-      statusOcr
+      usuario || dados.registeredBy || "Rafael",
+      dataHoje,
+      "Em Aberto"
     ]);
 
-    _limparCache_();
-    _registrarAuditoria_(autor, "Registro Ocorrência", "Ocorrência", idOcr, "Ocorrência registrada no setor " + dados.setor);
+    limparCache();
+    _registrarLog_(usuario || "Operador", "CRIAR", "OCORRENCIA", idOcorrencia, "Ocorrência registrada. Ação gerada: " + (idAtividadeGerada || "Nenhuma"));
 
-    return {
-      ok: true,
-      dados: {
-        id: idOcr,
-        atividadeGeradaId: idAtividadeGerada,
-        status: statusOcr
-      }
+    return { 
+      ok: true, 
+      dados: { 
+        id: idOcorrencia, 
+        idAtividadeGerada: idAtividadeGerada 
+      }, 
+      mensagem: "Ocorrência registrada com sucesso!" 
     };
-  } catch (erro) {
-    return { ok: false, mensagem: erro.toString(), dados: null };
+  } catch (error) {
+    return { ok: false, mensagem: "Erro ao criar ocorrência: " + error.message };
+  }
+}
+
+// ============================================================================
+// GESTÃO DE ALERTAS
+// ============================================================================
+
+/**
+ * Cria um alerta no quadro de avisos
+ */
+function criarAlerta(dados, usuario) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var aba = ss.getSheetByName(ABAS.ALERTAS);
+
+    var idAlerta = "ALT-" + Utilities.getUuid().substring(0, 6).toUpperCase();
+    var dataHoje = _formatarDataISO_(new Date());
+
+    aba.appendRow([
+      idAlerta,
+      dados.message || dados.mensagem,
+      dados.priority || dados.prioridade || "Amarelo",
+      dados.targetUser || dados.destinatario || "Todos",
+      usuario || "Thiago",
+      dataHoje,
+      dados.expiresAt || dados.dataExpiracao || "",
+      "SIM"
+    ]);
+
+    limparCache();
+    return { ok: true, dados: { id: idAlerta }, mensagem: "Alerta publicado." };
+  } catch (error) {
+    return { ok: false, mensagem: "Erro ao criar alerta: " + error.message };
   }
 }
 
 /**
- * Sincroniza recorrências e atualiza status de atraso
- * Pode ser vinculada a um Trigger diário (Time-driven trigger)
+ * Desativa um alerta do quadro
+ */
+function desativarAlerta(idAlerta) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var aba = ss.getSheetByName(ABAS.ALERTAS);
+    var dados = aba.getDataRange().getValues();
+
+    var colId = 0;
+    var colAtivo = 7;
+
+    for (var i = 1; i < dados.length; i++) {
+      if (String(dados[i][colId]) === String(idAlerta)) {
+        aba.getRange(i + 1, colAtivo + 1).setValue("NÃO");
+        break;
+      }
+    }
+
+    limparCache();
+    return { ok: true, mensagem: "Alerta removido." };
+  } catch (error) {
+    return { ok: false, mensagem: "Erro ao desativar: " + error.message };
+  }
+}
+
+// ============================================================================
+// SINCRONIZAÇÃO DIÁRIA & RECORRÊNCIAS
+// ============================================================================
+
+/**
+ * Sincroniza recorrências diárias e atualiza status de atraso
+ * Pode ser agendada via Acionador baseada em tempo (Ex: 06:00 diariamente)
  */
 function sincronizarExecucoes() {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var abaExec = ss.getSheetByName(ABAS.EXECUCOES);
     var dados = abaExec.getDataRange().getValues();
-    var hojeStr = _formatarDataIso_(new Date());
+
+    var hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
 
     var atualizados = 0;
     for (var i = 1; i < dados.length; i++) {
       var status = dados[i][6];
-      var dataLimite = _formatarDataIso_(dados[i][5]);
+      var dataLimiteStr = dados[i][5];
 
-      if ((status === "Pendente" || status === "Agendada") && dataLimite < hojeStr) {
-        abaExec.getRange(i + 1, 7).setValue("Em atraso");
-        atualizados++;
-      }
-    }
+      if (status === "Pendente" || status === "Agendada") {
+        if (dataLimiteStr) {
+          var dataLimite = new Date(dataLimiteStr);
+          dataLimite.setHours(0, 0, 0, 0);
 
-    _limparCache_();
-    _registrarAuditoria_("Sistema", "Sincronização", "Sistema", "SYNC", "Execuções sincronizadas. " + atualizados + " em atraso.");
-
-    return { ok: true, dados: { atualizados: atualizados } };
-  } catch (erro) {
-    return { ok: false, mensagem: erro.toString(), dados: null };
-  }
-}
-
-/**
- * Calcula indicadores, KPIs e estatísticas para o Painel
- */
-function obterIndicadores() {
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var abaExec = ss.getSheetByName(ABAS.EXECUCOES);
-    var abaOcr = ss.getSheetByName(ABAS.OCORRENCIAS);
-
-    var dadosExec = abaExec.getDataRange().getValues();
-    var dadosOcr = abaOcr.getDataRange().getValues();
-    var hojeStr = _formatarDataIso_(new Date());
-
-    var total = 0, pendentes = 0, hoje = 0, atrasadas = 0, concluidas = 0, agendadas = 0;
-    var perf = {
-      Thiago: { total: 0, concluidas: 0 },
-      Marcel: { total: 0, concluidas: 0 },
-      Rafael: { total: 0, concluidas: 0 }
-    };
-
-    for (var i = 1; i < dadosExec.length; i++) {
-      var row = dadosExec[i];
-      var status = row[6];
-      var resp = row[3];
-      var dtExec = _formatarDataIso_(row[4]);
-      var dtLim = _formatarDataIso_(row[5]);
-
-      total++;
-      if (status === "Pendente") pendentes++;
-      if (status === "Em atraso") atrasadas++;
-      if (status === "Concluída") concluidas++;
-      if (status === "Agendada") agendadas++;
-      if (dtExec === hojeStr || dtLim === hojeStr) hoje++;
-
-      USUARIOS_FIXOS.forEach(function(u) {
-        if (resp === u || resp === "Todos") {
-          perf[u].total++;
-          if (status === "Concluída") perf[u].concluidas++;
+          if (dataLimite < hoje) {
+            abaExec.getRange(i + 1, 7).setValue("Em atraso");
+            atualizados++;
+          }
         }
-      });
+      }
     }
 
-    var taxaGeral = total > 0 ? Math.round((concluidas / total) * 100) : 0;
-
-    return {
-      ok: true,
-      dados: {
-        total: total,
-        pendentes: pendentes,
-        hoje: hoje,
-        atrasadas: atrasadas,
-        concluidas: concluidas,
-        agendadas: agendadas,
-        taxaConclusao: taxaGeral,
-        performanceAssistentes: perf
-      }
-    };
-  } catch (erro) {
-    return { ok: false, mensagem: erro.toString(), dados: null };
+    limparCache();
+    Logger.log("Sincronização concluída. Itens atualizados para Em Atraso: " + atualizados);
+    return { ok: true, dados: { atualizados: atualizados } };
+  } catch (error) {
+    Logger.log("Erro na sincronização: " + error.toString());
+    return { ok: false, mensagem: error.message };
   }
 }
 
-/**
- * Gera relatório mensal em PDF com resumo operacional
- * @param {string} mesAno Formato "YYYY-MM" ou "08/2026"
- */
-function gerarRelatorioMensalPDF(mesAno) {
+// ============================================================================
+// CACHE & UTILITÁRIOS INTERNOS
+// ============================================================================
+
+function limparCache() {
   try {
-    var ind = obterIndicadores().dados;
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var nomeDoc = "Relatorio_Almoxarifado_" + (mesAno || "Mensal") + "_" + new Date().getTime();
-
-    // Cria documento temporário do Google Docs
-    var doc = DocumentApp.create(nomeDoc);
-    var body = doc.getBody();
-
-    body.appendParagraph("HOSPITAL REGIONAL - ALMOXARIFADO CENTRAL")
-      .setHeading(DocumentApp.ParagraphHeading.HEADING1);
-    body.appendParagraph("Relatório Mensal de Gestão de Atividades e Ocorrências - Período: " + (mesAno || "Atual"))
-      .setHeading(DocumentApp.ParagraphHeading.HEADING2);
-
-    body.appendParagraph("\n1. Indicadores de Desempenho (KPIs):");
-    body.appendParagraph("• Total de Atividades: " + ind.total);
-    body.appendParagraph("• Atividades Concluídas: " + ind.concluidas + " (" + ind.taxaConclusao + "%)");
-    body.appendParagraph("• Atividades em Atraso: " + ind.atrasadas);
-    body.appendParagraph("• Atividades Pendentes: " + ind.pendentes);
-
-    body.appendParagraph("\n2. Performance por Assistente:");
-    USUARIOS_FIXOS.forEach(function(u) {
-      var p = ind.performanceAssistentes[u] || { total: 0, concluidas: 0 };
-      var pct = p.total > 0 ? Math.round((p.concluidas / p.total) * 100) : 0;
-      body.appendParagraph("• " + u + ": " + p.concluidas + "/" + p.total + " tarefas (" + pct + "%)");
-    });
-
-    body.appendParagraph("\nDocumento gerado automaticamente pelo Sistema de Gestão do Almoxarifado em " + new Date().toLocaleString());
-
-    doc.saveAndClose();
-
-    var pdfBlob = doc.getAs("application/pdf").setName(nomeDoc + ".pdf");
-    var pasta = DriveApp.getRootFolder();
-    var arquivoPdf = pasta.createFile(pdfBlob);
-
-    // Remove doc temporário
-    DriveApp.getFileById(doc.getId()).setTrashed(true);
-
-    return {
-      ok: true,
-      dados: {
-        pdfUrl: arquivoPdf.getUrl(),
-        downloadUrl: arquivoPdf.getDownloadUrl(),
-        nomeArquivo: arquivoPdf.getName()
-      }
-    };
-  } catch (erro) {
-    return { ok: false, mensagem: erro.toString(), dados: null };
-  }
+    var cache = CacheService.getScriptCache();
+    cache.remove("almox_dados_v2");
+  } catch (e) {}
 }
-
-// ============================================================================
-// FUNÇÕES PRIVADAS AUXILIARES (_)
-// ============================================================================
 
 function _obterOuCriarAba_(ss, nomeAba, cabecalhos) {
   var aba = ss.getSheetByName(nomeAba);
   if (!aba) {
     aba = ss.insertSheet(nomeAba);
-    aba.appendRow(cabecalhos);
-    aba.getRange(1, 1, 1, cabecalhos.length)
-      .setBackground("#1565c0")
-      .setFontColor("#ffffff")
-      .setFontWeight("bold");
+  }
+
+  // Estilização do cabeçalho
+  if (cabecalhos && cabecalhos.length > 0) {
+    var rangeCabecalho = aba.getRange(1, 1, 1, cabecalhos.length);
+    rangeCabecalho.setValues([cabecalhos]);
+    rangeCabecalho.setBackground("#1565c0");
+    rangeCabecalho.setFontColor("#ffffff");
+    rangeCabecalho.setFontWeight("bold");
+    rangeCabecalho.setHorizontalAlignment("center");
     aba.setFrozenRows(1);
   }
   return aba;
 }
 
-function _lerTabelaComoObjetos_(aba) {
+function _lerAbaComoObjetos_(ss, nomeAba) {
+  var aba = ss.getSheetByName(nomeAba);
   if (!aba) return [];
+
   var dados = aba.getDataRange().getValues();
   if (dados.length <= 1) return [];
 
@@ -580,127 +655,135 @@ function _lerTabelaComoObjetos_(aba) {
 
   for (var i = 1; i < dados.length; i++) {
     var obj = {};
+    var linha = dados[i];
+    var linhaVazia = true;
+
     for (var j = 0; j < cabecalhos.length; j++) {
-      obj[cabecalhos[j]] = dados[i][j];
+      var chave = cabecalhos[j];
+      var valor = linha[j];
+      if (valor !== "" && valor !== null && valor !== undefined) {
+        linhaVazia = false;
+      }
+      obj[chave] = valor;
     }
-    lista.push(obj);
+
+    if (!linhaVazia) {
+      lista.push(obj);
+    }
   }
   return lista;
 }
 
-function _gerarIdUnico_(prefixo) {
-  var data = new Date();
-  var dStr = Utilities.formatDate(data, "GMT-3", "yyMMdd");
-  var seq = Math.floor(1000 + Math.random() * 9000);
-  var hash = Math.random().toString(16).substring(2, 6).toUpperCase();
-  return prefixo + "-" + dStr + "-" + seq + "-" + hash;
-}
-
-function _formatarDataIso_(data) {
-  if (!data) return "";
-  if (typeof data === "string" && data.length >= 10) return data.substring(0, 10);
-  return Utilities.formatDate(new Date(data), "GMT-3", "yyyy-MM-dd");
-}
-
-function _calcularDataLimite_(dataExecIso, dias) {
-  var d = new Date(dataExecIso + "T00:00:00");
-  d.setDate(d.getDate() + (Math.max(1, dias) - 1));
-  return Utilities.formatDate(d, "GMT-3", "yyyy-MM-dd");
-}
-
-function _registrarAuditoria_(usuario, acao, entidade, entidadeId, detalhes) {
+function _parseJSONSeguro_(str, fallback) {
+  if (!str) return fallback;
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var aba = ss.getSheetByName(ABAS.AUDITORIA);
-    if (!aba) return;
-    var dataHora = Utilities.formatDate(new Date(), "GMT-3", "yyyy-MM-dd HH:mm:ss");
-    var idLog = _gerarIdUnico_("AUD");
-    aba.appendRow([idLog, dataHora, usuario, acao, entidade, entidadeId, detalhes]);
+    return JSON.parse(str);
   } catch (e) {
-    Logger.log("Erro ao auditar: " + e);
+    return fallback;
   }
 }
 
-function _limparCache_() {
+function _formatarDataISO_(data) {
+  if (!(data instanceof Date)) data = new Date(data);
+  return Utilities.formatDate(data, Session.getScriptTimeZone() || "America/Sao_Paulo", "yyyy-MM-dd");
+}
+
+function _formatarDataStr_(val) {
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, Session.getScriptTimeZone() || "America/Sao_Paulo", "yyyy-MM-dd");
+  }
+  return String(val).split("T")[0];
+}
+
+function _registrarLog_(usuario, acao, entidade, entidadeId, detalhes) {
   try {
-    CacheService.getScriptCache().remove("DADOS_SISTEMA_ALMOXARIFADO");
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var aba = ss.getSheetByName(ABAS.AUDITORIA);
+    if (aba) {
+      aba.appendRow([
+        "LOG-" + Utilities.getUuid().substring(0, 8),
+        new Date().toISOString(),
+        usuario || "Sistema",
+        acao,
+        entidade,
+        entidadeId,
+        detalhes || ""
+      ]);
+    }
   } catch (e) {}
 }
 
-function _popularItensIniciais_(aba) {
-  var itens = [
-    ["001", "Seringa Descartável 1ml c/ Agulha", "Injetáveis", "Prateleira A1", 500, 480, "un"],
-    ["002", "Seringa Descartável 3ml Luer Lock", "Injetáveis", "Prateleira A1", 1000, 1250, "un"],
-    ["003", "Seringa Descartável 5ml Luer Slip", "Injetáveis", "Prateleira A2", 800, 720, "un"],
-    ["004", "Seringa Descartável 10ml Luer Lock", "Injetáveis", "Prateleira A2", 600, 350, "un"],
-    ["005", "Seringa Descartável 20ml Bico Central", "Injetáveis", "Prateleira A3", 400, 410, "un"],
-    ["006", "Luva de Procedimento Não Cirúrgica M", "EPI & Proteção", "Prateleira B1", 2000, 1850, "cx"],
-    ["007", "Luva de Procedimento Não Cirúrgica G", "EPI & Proteção", "Prateleira B1", 1500, 900, "cx"],
-    ["008", "Luva Cirúrgica Estéril 7.5", "EPI & Proteção", "Prateleira B2", 300, 280, "par"],
-    ["009", "Agulha Hipodérmica 25x7 (22G)", "Injetáveis", "Prateleira A4", 1200, 1400, "un"],
-    ["010", "Agulha Hipodérmica 40x12 Aspiração", "Injetáveis", "Prateleira A4", 800, 620, "un"],
-    ["011", "Cateter Intravenoso Periférico 20G", "Acesso Vascular", "Prateleira C1", 400, 390, "un"],
-    ["012", "Cateter Intravenoso Periférico 22G", "Acesso Vascular", "Prateleira C1", 450, 210, "un"],
-    ["013", "Gaze Hidrófila Estéril 7,5x7,5 11f", "Curativos", "Prateleira D1", 3000, 3200, "pct"],
-    ["014", "Atadura de Crepom 10cm x 1,8m", "Curativos", "Prateleira D2", 500, 480, "rl"],
-    ["015", "Esparadrapo Impermeável 10cm x 4,5m", "Curativos", "Prateleira D3", 200, 165, "rl"],
-    ["016", "Fita Microporosa Hipoalergênica 5cm", "Curativos", "Prateleira D3", 250, 290, "rl"],
-    ["017", "Álcool Etílico 70% Hidroalcoólico 1L", "Saneantes", "Área Química Q1", 100, 74, "fr"],
-    ["018", "Clorexidina Alcoólica 0,5% 1000ml", "Saneantes", "Área Química Q2", 80, 85, "fr"],
-    ["019", "Solução Fisiológica 0,9% 500ml Bolsa", "Soluções", "Palete S1", 600, 540, "fr"],
-    ["020", "Solução Glicosada 5% 500ml Bolsa", "Soluções", "Palete S2", 400, 310, "fr"],
-    ["021", "Máscara de Proteção Respiratória N95", "EPI & Proteção", "Prateleira B3", 1000, 1120, "un"],
-    ["022", "Avental Descartável Manga Longa 30g", "EPI & Proteção", "Prateleira B4", 800, 640, "un"]
-  ];
-  itens.forEach(function(row) { aba.appendRow(row); });
-}
+/**
+ * Popula a planilha com dados iniciais se necessário
+ */
+function _popularDadosExemplo_(abaAtiv, abaExec, abaOc, abaAlt, abaCfg, abaItens, abaUsr) {
+  var hojeStr = _formatarDataISO_(new Date());
 
-function _popularConfiguracoesIniciais_(aba) {
-  var configs = [
-    ["SISTEMA_NOME", "Gestão de Almoxarifado Hospitalar", "Nome da aplicação"],
-    ["ALMOXARIFE_CHEFE", "Thiago", "Usuário responsável pela supervisão"],
-    ["ASSISTENTES", "Marcel, Rafael", "Usuários assistentes operacionais"],
-    ["VERSAO", "2.0.0", "Versão do sistema Google Apps Script"]
-  ];
-  configs.forEach(function(row) { aba.appendRow(row); });
-}
+  // USUARIOS
+  if (abaUsr.getLastRow() <= 1) {
+    abaUsr.appendRow(["usr-1", "Thiago", "Almoxarife", "thiago.almoxarife@hospital.local"]);
+    abaUsr.appendRow(["usr-2", "Marcel", "Assistente", "marcel.assistente@hospital.local"]);
+    abaUsr.appendRow(["usr-3", "Rafael", "Assistente", "rafael.assistente@hospital.local"]);
+  }
 
-function _popularAtividadesIniciais_(abaAtiv, abaExec, abaAlert, abaOcr) {
-  var hojeStr = _formatarDataIso_(new Date());
+  // ITENS DO CATÁLOGO
+  if (abaItens.getLastRow() <= 1) {
+    var itensIniciais = [
+      ["MED-001", "Dipirona 500mg/mL Ampola 2mL", "Medicamentos", "Rack A-01", 500, 1200, "amp"],
+      ["MED-002", "Paracetamol 500mg Comprimido", "Medicamentos", "Rack A-02", 1000, 3400, "cp"],
+      ["MAT-101", "Seringa Descartável 5mL c/ Agulha", "Descartáveis", "Palete B-04", 800, 450, "un"],
+      ["MAT-102", "Seringa Descartável 10mL s/ Agulha", "Descartáveis", "Palete B-05", 600, 1800, "un"],
+      ["MAT-103", "Agulha Hipodérmica 25x7 (cx 100)", "Descartáveis", "Rack B-01", 50, 120, "cx"],
+      ["EPI-201", "Luva de Procedimento Tamanho M (cx 100)", "EPI", "Palete C-02", 100, 35, "cx"],
+      ["EPI-202", "Luva Cirúrgica Estéril 7.5 (par)", "EPI", "Rack C-05", 200, 580, "par"],
+      ["SAN-301", "Álcool em Gel 70% 500mL", "Saneantes", "Prateleira D-01", 80, 240, "fr"],
+      ["SAN-302", "Clorexidina Degermante 4% 1L", "Saneantes", "Prateleira D-02", 40, 95, "fr"]
+    ];
+    itensIniciais.forEach(function(row) { abaItens.appendRow(row); });
+  }
 
-  // Exemplo de atividades
-  var ex1 = {
-    titulo: "Conferência semanal de estoque de luvas de procedimento",
-    desc: "Contagem física das luvas M e G.",
-    cat: "Inventário & Contagem",
-    tipo: "cíclica",
-    per: "Semanal",
-    resp: "Marcel",
-    prazo: 1
-  };
-  abaExec.appendRow([
-    _gerarIdUnico_("EXE"),
-    _gerarIdUnico_("ACT"),
-    ex1.titulo,
-    ex1.resp,
-    hojeStr,
-    hojeStr,
-    "Pendente",
-    JSON.stringify([{ text: "Contagem Luva M (1850 cx)", completed: true }, { text: "Contagem Luva G (900 cx)", completed: false }]),
-    "",
-    "",
-    "[]",
-    ""
-  ]);
+  // CONFIGURACOES
+  if (abaCfg.getLastRow() <= 1) {
+    abaCfg.appendRow(["HOSPITAL_NOME", "Hospital Central de Alta Complexidade", "Nome da Unidade Hospitalar"]);
+    abaCfg.appendRow(["VERSAO_SISTEMA", "2.1.0-GAS", "Versão atual do aplicativo"]);
+    abaCfg.appendRow(["HORARIO_CORTE_DIARIO", "16:00", "Horário limite para encerramento de tarefas"]);
+  }
 
-  abaAlert.appendRow([
-    _gerarIdUnico_("ALT"),
-    "🔴 ATENÇÃO: Inventário emergencial de cateteres deve ser priorizado hoje.",
-    "Vermelho",
-    "Todos",
-    "Thiago",
-    hojeStr,
-    hojeStr,
-    "SIM"
-  ]);
+  // ALERTAS INICIAIS
+  if (abaAlt.getLastRow() <= 1) {
+    abaAlt.appendRow(["ALT-001", "Estoque de Seringas 5ml atingiu nível de segurança no Setor B-04.", "Vermelho", "Todos", "Thiago", hojeStr, "", "SIM"]);
+    abaAlt.appendRow(["ALT-002", "Inspeção sanitária agendada para sexta-feira. Manter paletes limpos.", "Laranja", "Todos", "Thiago", hojeStr, "", "SIM"]);
+  }
+
+  // ATIVIDADES & EXECUÇÕES INICIAIS
+  if (abaAtiv.getLastRow() <= 1) {
+    var check1 = JSON.stringify([
+      { id: "c1", label: "Conferir seringas 5mL físicas vs sistema", targetQuantity: 450, countedQuantity: 450, unit: "un", completed: true },
+      { id: "c2", label: "Conferir seringas 10mL físicas vs sistema", targetQuantity: 1800, countedQuantity: 0, unit: "un", completed: false },
+      { id: "c3", label: "Validar integridade das embalagens e lotes", targetQuantity: 1, countedQuantity: 0, unit: "un", completed: false }
+    ]);
+
+    abaAtiv.appendRow([
+      "ACT-001", "Conferência de Seringas e Descartáveis", "Validar estoque físico vs sistema para todos os calibres no pavilhão norte.",
+      "Conferência", "Operacional", "Diária", "", "", "Marcel", 1, "Realizar contagem cega nas prateleiras B-04 e B-05.", "[]", check1, hojeStr, "Ativa"
+    ]);
+
+    abaExec.appendRow([
+      "EXEC-001", "ACT-001", "Conferência de Seringas e Descartáveis", "Marcel", hojeStr, hojeStr, "Pendente", check1, "", "", "[]", ""
+    ]);
+
+    var check2 = JSON.stringify([
+      { id: "c1", label: "Contagem física das caixas de luvas M", targetQuantity: 35, countedQuantity: 0, unit: "cx", completed: false },
+      { id: "c2", label: "Identificar lotes e validades críticas", targetQuantity: 1, countedQuantity: 0, unit: "un", completed: false }
+    ]);
+
+    abaAtiv.appendRow([
+      "ACT-002", "Inventário Crítico: Luvas de Procedimento", "Inventário emergencial devido a divergência no faturamento.",
+      "Inventário", "Urgente", "Pontual", "", "", "Rafael", 1, "Verificar Palete C-02.", "[]", check2, hojeStr, "Ativa"
+    ]);
+
+    abaExec.appendRow([
+      "EXEC-002", "ACT-002", "Inventário Crítico: Luvas de Procedimento", "Rafael", hojeStr, hojeStr, "Em atraso", check2, "", "", "[]", ""
+    ]);
+  }
 }
